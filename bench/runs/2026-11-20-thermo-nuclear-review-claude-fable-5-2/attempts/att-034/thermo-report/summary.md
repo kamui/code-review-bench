@@ -1,0 +1,65 @@
+# Thermo-nuclear review — trpc/trpc#5017 "fix(server): inference fix for inputs with middleware"
+
+Range reviewed: `2abb2d5c..7dc04a7e` (`git diff main...review-head`), 2 files: `packages/server/src/core/internals/utils.ts` (rewrite of the `Overwrite` type) and the new `packages/tests/server/regression/issue-5020-inference-middleware.test.ts`.
+
+## Verdict
+
+The change does what its title says for the case it tests: with the merge-base `Overwrite`, `t.procedure.input(z.string()).use(...)` inferred a 50-member object made of `String.prototype` keys, and on the head it infers `string`. The new test fails on the merge-base and passes on the head, and `packages/tests` type-checks cleanly on the head (`tsc --noEmit -p tsconfig.json`, exit 0). Optional object inputs (`z.object(...).optional()`, `z.string().nullish()`) are also repaired as a side effect.
+
+There is one regression introduced by the rewrite (finding 1, context is lost after some middlewares) and two places where the same class of inference bug the PR targets is still present in the rewritten type (findings 2 and 3). Two low-priority notes follow. There are no security, devex or feature-gate concerns: the diff is type-level only plus one test file, and no runtime code, configuration, scripts or dependencies change.
+
+## How this was checked
+
+Every behavioural claim below was reproduced with the clone's own TypeScript 5.1.3 against two source trees: the head (the clone) and the merge-base (`git archive main packages/server/src packages/client/src` extracted into the work directory). The same scratch file was compiled against both and the diagnostics compared. Nothing was written to the clone. The runtime vitest suite was not run (unavailable for this review); all findings are type-level and tsc is the discriminating check.
+
+## Findings
+
+### 1. Medium — `ctx` is wiped to `{}` / `undefined` after any middleware whose `_ctx_out` is not an object type (regression)
+
+File: `packages/server/src/core/internals/utils.ts`, lines 21–24 (the "TType is an object, TWith is not" arm), reached through the unchanged callers `packages/server/src/core/internals/procedureBuilder.ts:38`, `packages/server/src/core/middleware.ts:65`, `:103`, `:136` and `utils.ts:71`.
+
+The rewrite makes `Overwrite<TType, TWith>` return `TWith` whenever `TWith` is not an object. That is the intended behaviour for inputs, but `Overwrite` is also how context is threaded through a procedure chain (`_ctx_out: Overwrite<TPrev['_ctx_out'], TNext['_ctx_out']>` and `ctx: Simplify<Overwrite<TParams['_config']['$types']['ctx'], TParams['_ctx_out']>>`), and there the previous context is always an object while `TNext['_ctx_out']` is not always one. The input lines in `CreateProcedureReturnInput` are protected by `UnsetMarker extends TNext['_input_in'] ? TPrev[...] : Overwrite<...>`, which catches `unknown` and `any`; the `_ctx_out` line has no such guard. On the merge-base `Overwrite<Ctx, unknown>` and `Overwrite<Ctx, undefined>` both evaluated to `Ctx` (because `keyof unknown` and `keyof undefined` are `never`); on the head they evaluate to `unknown` and `undefined`.
+
+`TNext['_ctx_out']` is `unknown` whenever TypeScript cannot infer `$Params` from the middleware's return type and falls back to the bare `ProcedureParams` constraint, whose `TContextOut` defaults to `unknown` (`packages/server/src/core/procedure.ts:28`). `MiddlewareResult<TParams>` does not use its type parameter structurally, so this happens easily. Compiled against both trees, with `type Ctx = { user?: { id: string }; db: { q: () => string } }` and `const t = initTRPC.context<Ctx>().create()`:
+
+- `t.procedure.use(() => { throw new TRPCError({ code: 'FORBIDDEN' }) }).query(({ ctx }) => ctx.db.q())` — merge-base: `ctx` is `Ctx`, compiles. Head: `ctx` is `{}`, `error TS2339: Property 'db' does not exist on type '{}'`. Same result for the `async` form, for `t.middleware(() => { throw ... })` passed to `.use()`, for a later `.use()` in the same chain (its `opts.ctx` is `{}`), and for `unstable_pipe` after such a middleware.
+- A middleware annotated `MiddlewareFunction<ProcedureParams, ProcedureParams>` — merge-base `Ctx`, head `{}` and TS2339.
+- `use(async (o) => { const res = await o.next(); return res as any })` and `return { ...res }` — merge-base `Ctx`, head `{}` and TS2339.
+- `use((o) => o.next({ ctx: o.ctx.user ? { user: o.ctx.user } : undefined }))` — merge-base: a union of two object types, compiles. Head: `{ ... } | undefined`, `error TS18048: 'ctx' is possibly 'undefined'`. `next({ ctx: undefined })` gives `ctx: undefined` outright.
+- `initTRPC.context<any>().create()` followed by `.use((o) => o.next({ ctx: { a: 1 } })).query(({ ctx }) => ctx.foo)` — merge-base compiles (`ctx` is an `any` index signature). Head: `ctx` is `{ a: number } | { [x: string]: any; ... }` and `ctx.foo` is `error TS2339`, because `any extends object` now takes both arms of the outer conditional.
+
+The new types also contradict the runtime: `procedureBuilder.ts:371–374` always computes `{ ...callOpts.ctx, ...nextOpts.ctx }`, so the context is never replaced or made `undefined` by a middleware. The effect is that code which compiled on 10.43.2 stops compiling after this change in every procedure that follows such a middleware, with the root context's properties reported as missing. The triggering shapes are not the common ones (a normal `return opts.next()` or `opts.next({ ctx: {...} })` is unaffected, as is a middleware that throws on one branch and calls `next` on another), which is why this is Medium and not High. Nothing in the repository's tests exercises these shapes, so the suite stays green. A direction that keeps the fix: only replace wholesale when `TType` is not an object, or guard the `_ctx_out` call sites the same way the input call sites are guarded.
+
+### 2. Low — "objects" still includes branded primitives, arrays, tuples and built-ins, so those inputs are still key-mapped after a middleware
+
+File: `packages/server/src/core/internals/utils.ts`, lines 11–12 (`TType extends object ? TWith extends object ?`).
+
+The discriminator chosen for "overwrite key by key" is `extends object`, which is true for much more than plain records. Those types still go through the non-homomorphic mapped type on lines 14–20 and come out as flattened records, which is the symptom this PR set out to remove. This is unchanged from the merge-base (not a regression); it is a gap in the fix. Verified on the head:
+
+- Branded primitives. `string & z.BRAND<'X'>` extends `object`, so `t.procedure.input(z.string().brand<'X'>()).use((o) => o.next()).query(({ input }) => { const s: string = input })` fails with `error TS2322: Type '{ [x: number]: string; ... charAt: ...; valueOf: ... }' is not assignable to type 'string'`. With `z.number().brand<'Id'>()`, `input + 1` fails with `error TS2365: Operator '+' cannot be applied`. This is the #5020 failure for the resolver's `input`, on a string/number input, after the fix.
+- Arrays and tuples. `inferRouterInputs` for `input(z.array(z.string())).use(...)` is `{ [x: number]: string; [iterator]: ...; length: number; push: ...; ...40 more }`, not `string[]`; `z.tuple`, `z.date`, `z.set`, `z.map` are flattened the same way. These remain mutually assignable with the real type (I checked assignment both ways, `for...of`, destructuring and `Array.isArray`), so the damage is unreadable hovers and error messages and failure of exact-type checks (`Equal<Inputs['arr'], string[]>` is `false`), not compile errors in ordinary call sites.
+
+The hard errors are limited to top-level branded primitive inputs combined with a middleware, which is uncommon; the array case is common (any `protectedProcedure.input(z.array(...))`) but cosmetic. Hence Low. The runtime merge in `createInputMiddleware` only merges plain non-array objects (`isPlainObject`, `middleware.ts:218–220` and `:243–249`), so excluding at least arrays and intersections with primitives from the key-wise arm would also bring the type in line with the runtime.
+
+### 3. Medium — optional input keys become required after any middleware; the rewritten type keeps the mapped type that causes it (present on the merge-base, not fixed here)
+
+File: `packages/server/src/core/internals/utils.ts`, lines 14–20.
+
+The object/object arm maps over `keyof TType | keyof TWith`. A mapped type over a union of `keyof`s is not homomorphic, so property modifiers are dropped: `Overwrite<{ a?: string; b: number }, { a?: string; b: number }>` is `{ a: string | undefined; b: number }`. Because an inline middleware returning `opts.next()` makes `TNext['_input_in']` equal to `TPrev['_input_in']`, every `.use()` after an `.input()` runs the input through this. On the head:
+
+- `t.procedure.input(z.object({ a: z.string().optional(), b: z.number() })).use((o) => o.next())` — `inferRouterInputs` gives `{ a: string | undefined; b: number }` (without the `.use` it is `{ a?: string | undefined; b: number }`), and both `client.opt.query({ b: 1 })` and `router.createCaller({}).opt({ b: 1 })` fail with `error TS2345: ... Property 'a' is missing in type '{ b: number; }' but required in type '{ a: string | undefined; b: number; }'`.
+- `z.object({ a: z.string().default('x') })` — `client.def.query({})` fails the same way.
+
+The merge-base produces identical errors; the behaviour arrived with `fa36f73a` (#4973), which started applying `Overwrite` to `_input_in`/`_input_out`, and this PR does not introduce it. I am reporting it because this PR is the fix for input inference under middleware, it rewrites this type and carries these lines over unchanged, and its test only covers `z.string()`. After merge, the most common input shape in real routers (an object with an optional or defaulted field on a procedure that has an auth middleware) still has a wrong input type that rejects valid calls at compile time. The same arm also turns a discriminated-union input into the cross product of its members (`{ type: 'a'; a } | { type: 'b'; b }` becomes four members including `{ type: 'b'; a; b }`); that one stays assignable in both directions and is only noise.
+
+### 4. Low — the doc comment promises `never` handling that the type does not implement; three branches are unreachable
+
+File: `packages/server/src/core/internals/utils.ts`, lines 8–9 (comment) and 21–30.
+
+The comment says `TWith` replaces `TType` "unless TWith is never", and line 29 (`: TType`) looks like the implementation of that. It is not reachable: `TWith extends any` on a naked type parameter distributes, so for `TWith = never` the whole conditional is `never` before any branch is chosen, and for every other `TWith` the test is true. Checked: `Overwrite<{ a: 1 }, never>` and `Overwrite<string, never>` are both `never`. The `: never` branches on lines 24 and 30 are dead for the same reason. This matches the merge-base result for `never`, so nothing regresses; the comment and the dead branches misdescribe the type to the next reader. If keeping `TType` for a `never` `TWith` is wanted, it needs a non-distributive test such as `[TWith] extends [never] ? TType : ...`.
+
+### 5. Low — the regression test covers only `z.string()` and leaves one of its own procedures unasserted
+
+File: `packages/tests/server/regression/issue-5020-inference-middleware.test.ts`, lines 13–17 and 25–38.
+
+`voidWithMiddleware` is declared in the router but nothing asserts on it, and the only input type exercised is `z.string()`. The assertions use `toBeString()`, which also passes for `any` and for string literal types (I checked both; `never` is rejected), so an input that degraded to `any` would not be caught; `toEqualTypeOf<string>()` would pin it. None of the context shapes in finding 1 and none of the input shapes in findings 2 and 3 are covered, which is how all three pass the suite. The two leftover `// ^?` twoslash markers (lines 8 and 34) are harmless.
