@@ -87,7 +87,7 @@ Grader workspaces: **yes**, without the clone, its caches and the client's accou
 Every member of every archive was read in memory and searched, not a sample. **(run)**
 
 - `[redacted-email]`, the owner's account email: **0 occurrences** in the 354 archives and in the 17 left-out attempts. **(run)**
-- `jack@jackchu.com`, the git author email: **0 occurrences** in both. **(run)**
+- `[redacted-email]`, the git author email: **0 occurrences** in both. **(run)**
 - Control: the same search found the owner's email 81 times in 27 of the 28 published rule-version-3 `plain` archives, whose Claude grader sessions carry it. So the search works. **(run)**
 - Other addresses: 48 distinct, all from the reviewed projects or the vendor. 2 are noreply addresses, 18 use example or test domains, and 28 are other test-data or upstream addresses. 25 of the 48 are not in the published rule-version-3 grading archives. 6 of those are real people and are in no tracked file: four `jsdom` maintainers in a `package.json` under `node_modules` (`l-bokeh-9232`), the `ripgrep` author in its man page (`n-ripgrep-2957`), and the `zod` author in its `package.json` (`j-trpc-5017`). Each appears in a session transcript and `work/stdout.jsonl` because the grader read that file. All six are in those projects' public sources. **(run)**
 
