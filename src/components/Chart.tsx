@@ -37,8 +37,7 @@ export function SetupName({ configuration, mark = true }: { configuration: Confi
 }
 
 /** The second Overview panel: the refuted or unproven share, or cost when the first panel already measures refuted claims. */
-export const pairedAxis = (axis: Axis): Axis => axis === 'doubt' || axis === 'refuted' ? 'cost' : 'doubt'
-export const panelAxes = (axis: Axis): [Axis, Axis] => pairedAxis(axis) === 'cost' ? ['cost', axis] : [axis, pairedAxis(axis)]
+const frontierWords: Record<Axis, string> = { cost: 'Nothing cheaper finds more', time: 'Nothing faster finds more', tokens: 'Nothing with fewer tokens finds more', doubt: 'Nothing with less doubt finds more', refuted: 'Nothing with fewer refuted claims finds more' }
 const lowValueHeads: Record<Axis, string> = { cost: 'Cost', doubt: 'Share', refuted: 'Refuted', tokens: 'Tokens', time: 'Time' }
 const shortAxis: Record<Axis, string> = { cost: 'Cost per trial', doubt: 'Refuted or unproven', refuted: 'Refuted claims per review', tokens: 'Output tokens', time: 'Median time' }
 export const axisLabels: Record<Axis, string> = {
@@ -47,8 +46,9 @@ export const axisLabels: Record<Axis, string> = {
 const setups = (count: number) => `${count} ${count === 1 ? 'setup' : 'setups'}`
 
 export const setupParts = (configuration: Configuration) => {
-  const [method = configuration.short, model = '', effort = ''] = configuration.short.split(' / ')
-  return { method, model, effort }
+  const [named = configuration.short, model = '', effort = ''] = configuration.short.split(' / ')
+  const edition = ` ${configuration.reviewEdition}`
+  return { method: configuration.experimental && named.endsWith(edition) ? named.slice(0, -edition.length) : named, model, effort }
 }
 
 export const setupLabel = (configuration: Configuration) => Object.values(setupParts(configuration)).filter(Boolean).join(' · ')
@@ -77,8 +77,8 @@ const scaleFor = (axis: Axis, values: number[]): Scale => axis === 'refuted' || 
 const fraction = (scale: Scale, value: number) => position(scale, value, 0, 100)
 const scoreTicks = [0, 25, 50, 75, 100]
 
-export function Chart({ summaries, detection, matching, axis, view, onSelect, guide, height, linked }: {
-  summaries: Summary[]; detection: DetectionView; matching: { included: number; excluded: number }; axis: Axis; view: ChartView; onSelect: (id: string) => void
+export function Chart({ summaries, detection, matching, axis, beside, view, onSelect, guide, height, linked }: {
+  summaries: Summary[]; detection: DetectionView; matching: { included: number; excluded: number }; axis: Axis; beside?: Axis; view: ChartView; onSelect: (id: string) => void
   guide?: ReactNode; height?: number; linked?: { id: string | null; point: (id: string | null) => void; pin: (id: string) => void }
 }) {
   const measure = detectionLabel(detection), dimensions = `${lowerFirst(measure)} against ${lowerFirst(axisLabels[axis])}`
@@ -127,7 +127,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
   const lowsAreTops = [...methodTops].every(([method, top]) => methodLows.get(method)?.summary.configuration.id === top.summary.configuration.id)
   const topIds = new Set([...methodTops.values()].map(point => point.summary.configuration.id))
   const named = new Set([...methodTops.values(), ...lowest(point => metricOf(point.summary, 'cost')).values()].map(point => point.summary.configuration.id))
-  const pair = pairedAxis(axis), shownAxes = panelAxes(axis)
+  const pair = beside ?? 'doubt', shownAxes = [axis, pair]
   const plotted = (on: Axis): Plotted[] => points.flatMap(point => {
     const metric = metricOf(point.summary, on)
     return metric === null ? [] : [{ ...point, metric, bounded: boundedOn(point.summary, on), x: metric, y: point.summary.detection ?? 0 }]
@@ -160,7 +160,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
           onMouseEnter={() => { preview(method)(); linked?.point(configuration.id) }} onMouseLeave={() => { preview(null)(); linked?.point(null) }}
           onFocus={() => { preview(method)(); linked?.point(configuration.id) }} onBlur={() => { preview(null)(); linked?.point(null) }}
           onClick={() => setSpotlight(current => current?.pinned && current.method === method ? null : { method, pinned: true })}>
-          <span className="strip-method"><Mark configuration={configuration} size={11} />{method}{configuration.experimental && <span className="row-tag">Experiment</span>}</span>
+          <span className="strip-method"><Mark configuration={configuration} size={11} />{method}{configuration.experimental && <span className="row-tag" title={`Edition ${configuration.reviewEdition}`}>Experiment</span>}</span>
           <span className="strip-model"><VendorMark configuration={configuration} />{model}{effort && <span className="measure-effort"> · {effort}</span>}</span>
           <span className="strip-value strip-found" data-label="Found"><span className="strip-dots" aria-hidden="true" style={{ '--mark-color': reviewColor(configuration) } as CSSProperties}>
             {[0, 50, 100].map(tick => <span key={tick} className="strip-tick" style={{ left: `${tick}%` }} />)}
@@ -178,8 +178,8 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
     </ul>}
     {points.length > 0 && view !== 'models' && view !== 'tradeoff' && <ul className="chart-keys" aria-label="Chart key">
       {view === 'setups' && <li><span className="whisker-key" aria-hidden="true" />Range with any one PR left out</li>}
-      {view === 'setups' && frontier.size > 0 && <li><span className="frontier-tag">None finds more for less</span>No other setup finds more at a lower {lowerFirst(axisLabels[axis])}</li>}
-      {view === 'setups' && undecided.size > 0 && <li><span className="frontier-tag unknown">None known finds more for less</span>Its {lowerFirst(axisLabels[axis])} is a lower bound that no other setup beats</li>}
+      {view === 'setups' && frontier.size > 0 && <li><span className="frontier-tag">{frontierWords[axis]}</span>No other setup finds more at a lower {lowerFirst(axisLabels[axis])}</li>}
+      {view === 'setups' && undecided.size > 0 && <li><span className="frontier-tag unknown">{frontierWords[axis]}</span>Its {lowerFirst(axisLabels[axis])} is a lower bound that no other setup beats</li>}
       {view === 'skills' && <li><span className="context-key" aria-hidden="true" />Other selected setups</li>}
       {bounded && <li><svg className="bound-key" width="16" height="16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" /></svg>Lower bound, ≥ in the table</li>}
     </ul>}
@@ -194,7 +194,7 @@ export function Chart({ summaries, detection, matching, axis, view, onSelect, gu
       {withheld.length > 0 && <span>Not plotted, {lowerFirst(measure)} unavailable: {withheld.map(row => `${row.reason} (${setups(row.count)})`).join(' ')}</span>}
       {view !== 'models' && bounded && <GuideItem label="Dashed marks">A lower bound of {lowerFirst(axisLabels[boundedAxis])}: some attempts recorded only part of their usage, so the true value may be higher.{view === 'setups' && ' They are left out of the frontier.'}</GuideItem>}
       {unplotted.length > 0 && <span>No {lowerFirst(axisLabels[axis])} for {unplotted.map(point => `${setupLabel(point.summary.configuration)} (${point.summary.reasons[axis]})`).join('; ')}.</span>}
-      {axis === 'refuted' && <span>Refuted claims are compared on the {matching.included} of {matching.included + matching.excluded} selected PRs where every selected setup has admitted, assessed reviews, with PRs weighted equally. A setup that admitted only some trials of a matched PR is measured on the reviews it delivered; the tooltip gives its admitted trials.</span>}
+      {(axis === 'refuted' || (view === 'tradeoff' && pair === 'refuted')) && <span>Refuted claims are compared on the {matching.included} of {matching.included + matching.excluded} selected PRs where every selected setup has admitted, assessed reviews, with PRs weighted equally. A setup that admitted only some trials of a matched PR is measured on the reviews it delivered; the tooltip gives its admitted trials.</span>}
       {axis === 'time' && <span>Completed trials only. Includes replacement attempts; excludes gaps between attempts, provisioning, and grading.</span>}
       {(axis === 'cost' || view === 'tradeoff') && costNote(shown) && <GuideItem label="Cost">{costNote(shown)}</GuideItem>}
       {points.some(point => point.summary.detectionNote) && <GuideItem label="Dotted underline">The value counts unresolved detection decisions as zero credit; point at it for the count.</GuideItem>}
@@ -229,8 +229,8 @@ function SetupRows({ points, measure, axis, scale, frontier, undecided, onSelect
           aria-label={`${configuration.short}: ${measure} ${percent(score)}${noted(summary)}${range ? `, ${percent(range.low)} to ${percent(range.high)} leaving one PR out` : ''}; ${axisLabels[axis]} ${formatMetric(axis, metric, starred, bounded)}${frontier.has(configuration.id) ? '; on the frontier of these two measures' : ''}. Inspect evidence`}>
           <span className="rank-name"><Mark configuration={configuration} />
             <span><strong>{method}</strong><span className="rank-model"><VendorMark configuration={configuration} />{model}{effort && ` · ${effort}`}
-              {frontier.has(configuration.id) ? <span className="frontier-tag" title={`No other setup finds more at a lower ${lowerFirst(axisLabels[axis])}`}>None finds more for less</span>
-                : undecided.has(configuration.id) && <span className="frontier-tag unknown" title={`Its ${lowerFirst(axisLabels[axis])} is a lower bound that no other setup beats`}>None known finds more for less</span>}</span></span></span>
+              {frontier.has(configuration.id) ? <span className="frontier-tag" title={`No other setup finds more at a lower ${lowerFirst(axisLabels[axis])}`}>{frontierWords[axis]}</span>
+                : undecided.has(configuration.id) && <span className="frontier-tag unknown" title={`Its ${lowerFirst(axisLabels[axis])} is a lower bound that no other setup beats`}>{frontierWords[axis]}</span>}</span></span></span>
           <span className="rank-cell"><span className="rank-value"><Score summary={summary} /></span>
             <span className="rank-track">{scoreTicks.map(tick => <span key={tick} className="rank-grid" style={{ left: `${tick}%` }} />)}
               {range && <span className="rank-whisker" style={{ left: `${range.low}%`, width: `${range.high - range.low}%` }} />}

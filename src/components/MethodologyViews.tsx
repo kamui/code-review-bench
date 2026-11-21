@@ -93,7 +93,7 @@ export function MethodologyViews({ fullTable, dataset, configurations, cards, se
     { group: 'Tools', tabs: [...novel.length + awaiting.length > 0 || tab === 'candidates' ? [{ value: 'candidates' as const, label: `Pending candidates (${novel.length + awaiting.length})` }] : [], { value: 'comparison', label: 'Compare setups' }, { value: 'table', label: 'Full table' }] },
   ]
   return <Paper withBorder radius="lg" className="methodology-panel" id="dimensions">
-    <div className="dimension-head"><Title order={3}>Detail tables</Title>
+    <div className="dimension-head"><Title order={3}>Full numbers</Title>
       <Text className="subsection-lede">Each measure stands on its own, for the selected setups and PRs; no single score combines them. Rows start with the setup that finds the most known problems. A small number beside a value points to a note under its table.</Text></div>
     <Tabs value={tab} onChange={value => { const next = scorecardTabs.find(item => item === value); if (next) onTab(next) }} className="dimension-tabs">
       <Select className="dimension-select" aria-label="Measure" size="sm" allowDeselect={false} value={tab} onChange={value => { const next = scorecardTabs.find(item => item === value); if (next) onTab(next) }}
