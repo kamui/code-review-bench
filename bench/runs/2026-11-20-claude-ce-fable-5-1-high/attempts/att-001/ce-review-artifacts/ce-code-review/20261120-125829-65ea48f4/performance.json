@@ -1,0 +1,36 @@
+{
+  "reviewer": "performance",
+  "findings": [
+    {
+      "title": "Optimization skipped when REQUESTS_CA_BUNDLE/CURL_CA_BUNDLE is set",
+      "severity": "P3",
+      "file": "src/requests/adapters.py",
+      "line": 98,
+      "why_it_matters": "With a Session (the default for requests.get/post), merge_environment_settings rewrites verify=True into the bundle path string whenever REQUESTS_CA_BUNDLE or CURL_CA_BUNDLE is set, which is the standard configuration in corporate/proxy environments. That string reaches _urllib3_request_context as pool_kwargs['ca_certs'], so urllib3 still builds a fresh SSLContext and calls load_verify_locations() on every new connection (verified offline: 3 connections -> 3 load_verify_locations calls, versus 0 on the bare verify=True path). The PR's headline win therefore does not apply to a large class of real deployments, while the same preloaded-context technique (one cached context per bundle path) would cover them. Not a regression versus base, but a material gap between the claimed and delivered improvement.",
+      "autofix_class": "manual",
+      "owner": "human",
+      "requires_verification": true,
+      "suggested_fix": "Extend the cached-context approach to string `verify` values instead of passing `ca_certs`/`ca_cert_dir`: e.g. add `@functools.lru_cache(maxsize=16) def _ssl_context_for_bundle(path: str) -> ssl.SSLContext: ctx = create_urllib3_context(); ctx.load_verify_locations(cafile=None if os.path.isdir(path) else path, capath=path if os.path.isdir(path) else None); return ctx`, and in `_urllib3_request_context` set `pool_kwargs['ssl_context'] = _ssl_context_for_bundle(verify)` for the str branch (after the existing os.path.exists check so the OSError contract is preserved), dropping the `conn.ca_certs`/`conn.ca_cert_dir` assignments in `cert_verify` for the str case. Assumptions: the bundle at a given path is treated as immutable for the process lifetime (key on (path, mtime) if that is unacceptable); and because the same context is then shared, the client-cert case (cert=...) must get a non-shared context so load_cert_chain does not mutate the cached one (see residual risk).",
+      "confidence": 75,
+      "evidence": [
+        "src/requests/adapters.py:96-98: `elif isinstance(verify, str):` / `if not os.path.isdir(verify):` / `pool_kwargs[\"ca_certs\"] = verify`",
+        "src/requests/sessions.py:766-771: `if verify is True or verify is None: verify = (os.environ.get(\"REQUESTS_CA_BUNDLE\") or os.environ.get(\"CURL_CA_BUNDLE\") or verify)` -- a Session turns verify=True into a path string before HTTPAdapter.send sees it",
+        "urllib3/util/ssl_.py:413-415 (urllib3 2.8.0): `if ca_certs or ca_cert_dir or ca_cert_data:` / `context.load_verify_locations(ca_certs, ca_cert_dir, ca_cert_data)` -- still executed per new connection when the pool carries ca_certs",
+        "urllib3/connection.py:1031-1038: `if ssl_context is None:` / `context = create_urllib3_context(...)` -- a fresh context is built per connection on the str path because pool_kwargs has no ssl_context",
+        "Offline measurement (load_verify_locations monkeypatched, wrap_socket stubbed): verify=True -> {'wrap_socket [shared]': 3}; verify=<path str> -> {'load_verify_locations': 3, 'wrap_socket': 3}; Session.merge_environment_settings(..., verify=True, ...) with REQUESTS_CA_BUNDLE set returns verify of type str",
+        "PR body acknowledges the gap: 'I think that the logic could be moved to _urllib3_request_context() and benefit from using a cached context in those cases too.'"
+      ],
+      "pre_existing": false
+    }
+  ],
+  "residual_risks": [
+    "Shared-state correctness (owned by correctness/security reviewers, evidence supplied for routing): with verify=True and cert=(certfile, keyfile), urllib3/util/ssl_.py:429-433 calls `context.load_cert_chain(certfile, keyfile)` on the process-wide `_preloaded_ssl_context` per connection (verified offline: {'load_cert_chain [shared]': 3}); the client certificate then remains loaded in the context used by every other verify=True pool, session and thread in the process.",
+    "Behavioral regression (owned by correctness reviewer, evidence supplied for routing): urllib3 poolmanager.py:400-409 `_merge_pool_kwargs` lets request-level pool_kwargs override PoolManager-level kwargs, so an HTTPAdapter subclass that injects `ssl_context=custom` via init_poolmanager (the documented pattern for truststore / custom TLS settings) silently has its context replaced by `_preloaded_ssl_context` on every verify=True request (verified offline: pool.conn_kw['ssl_context'] is custom -> False, is _preloaded -> True; with verify=False the custom context is kept). At base, pool_kwargs carried only cert_reqs so the custom context survived.",
+    "HTTPS-proxy (CONNECT tunnel) path: urllib3/connection.py:964-967 `_connect_tls_proxy` uses `ssl_context = None` and `ca_certs = self.ca_certs` for tunneling proxies; since cert_verify no longer sets ca_certs for verify=True, the proxy leg now falls through to `load_default_certs()` (OS trust store) on a fresh context per connection instead of certifi's bundle. Per-connection CA loading therefore still happens on this path (not a perf regression; measured load_default_certs ~0.2 ms on this Linux host) but the trust store used to verify the proxy changes -- a correctness/security matter for other reviewers.",
+    "Import-time cost checked and judged immaterial: the module-level create_urllib3_context()+load_verify_locations(certifi bundle, 240 KB) costs ~3 ms once per process (`import requests` total ~52 ms; adapters module self-time 4.7 ms under -X importtime). Not reported as a finding. Note that a missing/unreadable DEFAULT_CA_BUNDLE_PATH now fails at `import requests` rather than at first HTTPS request (correctness lane)."
+  ],
+  "testing_gaps": [
+    "No test asserts the performance invariant the PR exists for: that a verify=True HTTPS pool obtained via HTTPAdapter._get_connection carries `conn_kw['ssl_context'] is adapters._preloaded_ssl_context` with `ca_certs`/`ca_cert_dir` None, and that repeated requests to the same host reuse one pool (len(poolmanager.pools) stays 1). A monkeypatched ssl.SSLContext.load_verify_locations counter around two connections would lock in the zero-per-connection behavior.",
+    "No test covers the env-var path (REQUESTS_CA_BUNDLE set, verify=True through a Session) to document that it intentionally still takes the ca_certs/per-connection route, or to catch a future change to that behavior."
+  ]
+}
