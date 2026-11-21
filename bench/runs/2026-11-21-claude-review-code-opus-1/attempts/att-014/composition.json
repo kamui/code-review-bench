@@ -1,0 +1,178 @@
+{
+ "run": {
+  "files": "complete",
+  "verification": "complete",
+  "coverage": "complete",
+  "specs": [
+   "user-supplied pull-request text: withastro/astro#16079 \"fix(vercel): Fix ISR path rewrite to prevent 404\" (review packet, cutoff 2026-03-25T12:02:24Z)"
+  ],
+  "target_kind": "range",
+  "target": "main...review-head",
+  "base_ref": "main",
+  "base_sha": "b089b904f1ed578e9edaefd129bf9843120a808f",
+  "issues": [],
+  "change_description": "fix(vercel): Fix ISR path rewrite to prevent 404\n\n"
+ },
+ "summary": {
+  "status": "Changes Requested",
+  "intent": "Make routes served by the Vercel adapter's ISR function stop returning 404 after #15959, by applying the `x_astro_path` query value that the ISR route rewrite supplies.",
+  "issue_fit": "Issue alignment unavailable: the pull request names no originating issue, so intent comes from the user-supplied pull-request text and the commit message. The ISR 404 fix works at the handler level, but it reopens the untrusted path override that the released 10.0.2 fix (#15959) closed.",
+  "coverage": "Both changed files reviewed against the merge-base, along with the adapter's ISR routing and function build (`src/index.ts`), the existing path-override security test, and the 10.0.2 changelog entry. The built `_render` and `_isr` handlers were called in-process from fixture copies in the work directory. Uncommitted changes (untracked `.mcp.json`) are outside the range and were not reviewed. Vercel's platform behaviour could not be checked offline.",
+  "check_details": [
+   "Reviewer ran `node --test test/path-override-security.test.js test/isr.test.js` at the reviewed head: unavailable. The fixture build failed with ENOENT creating `test/fixtures/<fixture>/.astro/collections/` before any assertion ran, which is an environment failure.",
+   "Reviewer ran a scratch probe at the reviewed head (fixture copy in the work directory, built `_render` handler): `GET /api/public?x_astro_path=/api/private` with `x-vercel-isr: 1` rendered `private`. Without the header, and with only `x-astro-path`, it rendered `public`.",
+   "Reviewer ran a scratch probe at the reviewed head (ISR fixture copy, built `_isr` handler): `/_isr?x_astro_path=/one` returned 200 with `x-vercel-isr: 1` and 404 without it."
+  ]
+ },
+ "findings": [
+  {
+   "id": "vercel/entrypoint-isr-header-path-override",
+   "title": "Do not trust the client-settable x-vercel-isr header for path overrides",
+   "priority": "P1",
+   "action": "must-fix",
+   "kind": "security",
+   "trigger": "A request reaches the `_render` or `_isr` function with `x-vercel-isr: 1` and `?x_astro_path=/api/private` on a different URL, such as `/api/public`. `_render` serves every non-ISR deployment and ISR-excluded routes.",
+   "impact": "The handler routes on the attacker-chosen path, which breaks the released 10.0.2 guarantee that path overrides apply only with the trusted middleware secret. If Vercel forwards a client-supplied `x-vercel-isr` header, Vercel's routing, firewall path rules and cache key would see one path while Astro renders another.",
+   "change": "Gate the query override on a signal the client cannot forge, such as an adapter-generated secret that only the ISR route `dest` supplies, checked in the entrypoint. A build-time flag alone cannot work because `_render` and `_isr` are built from the same entry bundle. Then extend `test/path-override-security.test.js` to send `x-vercel-isr: 1` with `?x_astro_path=` to `_render` and assert the original path is kept.",
+   "source": "Released `@astrojs/vercel` 10.0.2 changelog (#15959): \"override values are only applied when the trusted middleware secret is present.\"",
+   "anchor": {
+    "type": "line",
+    "path": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+    "start_line": 21,
+    "end_line": 26,
+    "side": "RIGHT"
+   }
+  }
+ ],
+ "questions": [
+  {
+   "id": "premise-vercel-strips-isr-header",
+   "title": "Does Vercel strip a client-supplied x-vercel-isr header?",
+   "evidence": "The head trusts `x-vercel-isr: 1` at `entrypoint.ts:24`. No file in the repository documents who sets this header or whether Vercel removes a client-supplied copy before invoking `_render` or `_isr`.",
+   "why_it_matters": "If clients can send it, the confirmed finding is directly exploitable on deployed sites. If Vercel strips it, the finding still stands at the handler level, but its platform impact is narrower.",
+   "answer": "Vercel's documentation, or a maintainer test against a live deployment that sends the header from a client, settles this.",
+   "anchor": {
+    "type": "line",
+    "path": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+    "start_line": 24,
+    "end_line": 24,
+    "side": "RIGHT"
+   }
+  },
+  {
+   "id": "premise-isr-query-not-displaceable",
+   "title": "Can a client's x_astro_path displace the one the ISR rewrite adds?",
+   "evidence": "ISR routes rewrite to `/_isr?x_astro_path=$0` with `passQuery: true` and `allowQuery: [x_astro_path]` (`src/index.ts:63`, `:712-713`), and the entrypoint reads the first value with `url.searchParams.get`. Vercel's merge order for the original query and the dest query is not documented in the repository.",
+   "why_it_matters": "If a client value can come first, an ISR route could render, and cache under its key, a page other than the one Vercel matched. That would widen the confirmed finding to ISR routes even where Vercel sets the header itself.",
+   "answer": "Vercel's Build Output API documentation, or a maintainer test against a live ISR deployment, settles this.",
+   "anchor": {
+    "type": "line",
+    "path": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+    "start_line": 25,
+    "end_line": 25,
+    "side": "RIGHT"
+   }
+  }
+ ],
+ "observations": [
+  {
+   "fact": "The pull request adds no automated test for the ISR rewrite, although the built `_isr` handler returns 200 for `/_isr?x_astro_path=/one` with `x-vercel-isr: 1` and 404 without it.",
+   "evidence": "pr-body \"No additional test cases added\"; scratch probe `clone-work/isr-fn-probe.mjs` output `{\"isr_with_header\":200,\"isr_without_header\":404}`."
+  }
+ ],
+ "prior_items": [],
+ "record": {
+  "repository": "/home/jack/rq-rco1/2026-11-21-claude-review-code-opus-1/att-014/clone",
+  "requirements": [
+   {
+    "source": "pr-body/\"Fix a bug which prevented pages from being served by ISR by the vercel adapter.\"",
+    "class": "acceptance",
+    "disposition": "met",
+    "evidence": "In-process, the built `_isr` handler returns 200 for `/_isr?x_astro_path=/one` with `x-vercel-isr: 1` (it was 404 without the header). That Vercel sets the header on ISR invocations rests on the author's manual end-to-end deployment and cannot be checked offline."
+   },
+   {
+    "source": "packages/integrations/vercel/CHANGELOG.md:7 (released 10.0.2, #15959) \u2014 preservation of \"override values are only applied when the trusted middleware secret is present\"",
+    "class": "supporting",
+    "disposition": "partial",
+    "evidence": "compliance: partial; compatibility: violated. `entrypoint.ts:24-25` applies the query override without the secret, and the `_render` probe renders `private` for `/api/public`. No release decision accepts the break. Linked finding: vercel/entrypoint-isr-header-path-override."
+   }
+  ],
+  "files": [
+   {
+    "path": ".changeset/common-cats-travel.md",
+    "state": "reviewed"
+   },
+   {
+    "path": "packages/integrations/vercel/src/serverless/entrypoint.ts",
+    "state": "reviewed"
+   }
+  ],
+  "check_evidence": [
+   {
+    "check": "node --test test/path-override-security.test.js test/isr.test.js (packages/integrations/vercel)",
+    "head": "71ae513388df11d7dad6b1e0077c402ad03d0d62",
+    "outcome": "unavailable",
+    "reason": "environment failure: the fixture build hit ENOENT on mkdir `.astro/collections/` before any assertion ran"
+   },
+   {
+    "check": "node clone-work/isr-header-probe.mjs (built _render, fixture copy)",
+    "head": "71ae513388df11d7dad6b1e0077c402ad03d0d62",
+    "outcome": "reviewer-executed",
+    "reason": "in-process probe: x-vercel-isr: 1 plus query rendered private; the other variants rendered public"
+   },
+   {
+    "check": "node clone-work/isr-fn-probe.mjs (built _isr, ISR fixture copy)",
+    "head": "71ae513388df11d7dad6b1e0077c402ad03d0d62",
+    "outcome": "reviewer-executed",
+    "reason": "in-process probe: 200 with the header, 404 without it"
+   }
+  ],
+  "verification": {
+   "tasks": [
+    {
+     "id": "vercel/entrypoint-isr-header-path-override",
+     "type": "candidate",
+     "trigger": "security",
+     "batch": "initial",
+     "ruling": "confirmed"
+    },
+    {
+     "id": "premise-vercel-strips-isr-header",
+     "type": "safety-premise",
+     "area": "security",
+     "premise": "On Vercel's platform, a client-supplied `x-vercel-isr` request header is always removed or overwritten before the request reaches the `_render` or `_isr` serverless function.",
+     "evidence": "{unavailable: Vercel platform}; entrypoint.ts:24",
+     "batch": "initial",
+     "ruling": "unresolved",
+     "reopened_as": "premise-vercel-strips-isr-header"
+    },
+    {
+     "id": "premise-isr-query-not-displaceable",
+     "type": "safety-premise",
+     "area": "security",
+     "premise": "For a request routed to `/_isr?x_astro_path=$0` with `passQuery: true`, a client-supplied `x_astro_path` can never become the first value `url.searchParams.get` returns.",
+     "evidence": "src/index.ts:63, src/index.ts:712-713; {unavailable: Vercel query merge order}",
+     "batch": "initial",
+     "ruling": "unresolved",
+     "reopened_as": "premise-isr-query-not-displaceable"
+    }
+   ],
+   "batches": [
+    {
+     "bundle": "/home/jack/rq-rco1/2026-11-21-claude-review-code-opus-1/att-014/tmp/review-dLublE/initial",
+     "accounting": "/home/jack/rq-rco1/2026-11-21-claude-review-code-opus-1/att-014/tmp/review-dLublE/initial/accounting.json",
+     "operation": "Agent subagent_type=general-purpose model=opus run_in_background=false"
+    }
+   ],
+   "outstanding": []
+  },
+  "routed": {
+   "unresolved": [
+    "premise-vercel-strips-isr-header",
+    "premise-isr-query-not-displaceable"
+   ],
+   "disputed": [],
+   "unrecoverable_inputs": []
+  }
+ }
+}
