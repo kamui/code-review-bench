@@ -137,7 +137,7 @@ The bases give about **$880 to $1,320** for 48 reviews, below the issue's $1,300
 
 Two accounting facts bear on continuing this frozen run:
 
-1. **Counted spend can reach the run cap before the reviews do.** A valid CE review whose usage total cannot be proven counts at its whole $95 reservation. This review did, and seven of the fifteen 2026-10-28 CE Opus reviews did. If half of the remaining 47 do, the counted spend is about 24 × $95 + 23 × $22 ≈ $2,790, above the frozen $2,500 cap, so `run-cell` would refuse launches before all 48 are filed. A lower reservation lowers that count but raises the chance that the client's bound stops a review on the dearest tasks.
+1. **Counted spend can reach the run cap before the reviews do.** A valid CE review whose usage total cannot be proven counts at its whole $95 reservation. This review did, and seven of the fifteen 2026-10-28 CE Opus reviews did. If half of the remaining 47 do, the counted spend is about 25 × $95 + 23 × $22 ≈ $2,880 with this review's $95, above the frozen $2,500 cap, so `run-cell` would refuse launches before all 48 are filed. A lower reservation lowers that count but raises the chance that the client's bound stops a review on the dearest tasks.
 2. **The cap and reservation are frozen.** Changing either needs a new run, and the reviews would then come from two runs; the registry takes a task's reviews from one run, so this review of `i-requests-6667` could not be pooled with a replacement run's other trials of that task.
 
 Options:

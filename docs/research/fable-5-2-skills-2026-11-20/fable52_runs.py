@@ -2,8 +2,11 @@
 """Define, check and freeze the Fable 5.2 thermo-nuclear-review and ce-code-review runs of issue 523.
 
 Each run copies the frozen inputs of the runs it is compared with and changes only the model, ids, label,
-caps, reservation and rate. `define` refuses to write a run whose copied inputs differ from every source run
-it names, and writes the byte comparison it made beside this script.
+caps, reservation and rate. `define` stops when a source run's cohort row differs from the current targets,
+when a field that a fresh skill-provenance collect writes differs from the copied provenance file, when a
+source run's execution policy differs, or when another precondition fails; the provenance and policy checks
+run after the arm and inputs are written. It does not enforce byte equality of the copied inputs: it records the
+byte comparison it made beside this script.
 
 Usage:
   BENCH_RUNTIME_STORE=<store> fable52_runs.py define thermo --upstream <pstack-claude clone>
