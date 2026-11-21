@@ -738,6 +738,8 @@ fn review_code_workers_run_on_the_reviewers_model_family() {
         ("sonnet", vec!["claude-sonnet-5-5", "high"], "sonnet"),
         ("opus", vec!["claude-opus-5-5", "high"], "opus"),
         ("haiku", vec!["claude-haiku-5-5", "high"], "haiku"),
+        ("fable-5-1", vec!["claude-fable-5-1", "high"], "fable"),
+        ("fable-5-2", vec!["claude-fable-5-2", "high"], "fable"),
     ] {
         let _ = fs::remove_file(&claude.fixture.capture);
         let output = claude.review_code_on(name, vars(), None, &model_effort);
@@ -750,14 +752,14 @@ fn review_code_workers_run_on_the_reviewers_model_family() {
         assert_eq!(receipt.after("--model"), model, "{name}");
     }
     let _ = fs::remove_file(&claude.fixture.capture);
-    let output = claude.review_code_on("fable", vars(), None, &["claude-fable-5-1", "high"]);
+    let output = claude.review_code_on("mythos", vars(), None, &["claude-mythos-5", "high"]);
     assert_eq!(output.status.code(), Some(2), "{}", both(&output));
     assert!(
-        stderr(&output).contains("review-code has no worker alias for model claude-fable-5-1"),
+        stderr(&output).contains("review-code has no worker alias for model claude-mythos-5"),
         "{}",
         both(&output)
     );
-    assert!(!claude.fixture.attempt("fable").join("prompt.txt").exists());
+    assert!(!claude.fixture.attempt("mythos").join("prompt.txt").exists());
     assert!(claude.fixture.receipt().is_none(), "the reviewer started");
 }
 
