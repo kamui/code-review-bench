@@ -140,6 +140,34 @@ fn literals_replace_every_occurrence() {
 }
 
 #[test]
+fn literals_replace_escaped_encoded_and_recased_forms() {
+    let rules = values();
+    for written in [
+        r#"(?i)person@example\.com"#,
+        r#""person@example\\.com""#,
+        r#"person\@example\.com"#,
+        "person%40example.com",
+        "person%40example%2Ecom",
+        "Person@Example.COM",
+    ] {
+        let redacted = text(format!("<{written}>").as_bytes(), &rules);
+        assert!(
+            redacted.contains("[redacted-email]") && !redacted.contains("example"),
+            "{written} became {redacted}"
+        );
+    }
+    assert_eq!(text(b"acct\\-0000\\-example", &rules), "[redacted-account]");
+    assert_eq!(text(b"EXAMPLEHOST", &rules), "host-01-xyz");
+    for unrelated in [
+        "personXexample.com",
+        "person@example-com",
+        "acct-0000_example",
+    ] {
+        assert!(redact(unrelated.as_bytes(), &rules).clean(), "{unrelated}");
+    }
+}
+
+#[test]
 fn sqlite_files_are_reported_not_rewritten() {
     let rules = values();
     for magic in [SQLITE, WAL[0], WAL[1]] {

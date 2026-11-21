@@ -5,7 +5,7 @@
 //! `creator_account_id` and `plan_type` values, in plain JSON or inside JSON strings whose quotes are escaped any
 //! number of times. The literal rules come from a private values file outside the repository
 //! ([`values_path`]): each listed email address, organization id and account id becomes its placeholder, and each
-//! machine name becomes its stand-in of the same length. A missing file leaves the field rules alone. The
+//! machine name becomes its stand-in of the same length, in each form [`written_forms`] matches. A missing file leaves the field rules alone. The
 //! structure rules replace the owner's personal agent instructions, the list of installed skills a Codex session
 //! gives, the Windows account in a `/mnt/<drive>/Users/` path and the skill folder names under it.
 //!
@@ -259,18 +259,64 @@ fn chain(
     }
 }
 
-/// A literal value and the placeholder that replaces it.
+/// A private value in any form [`written_forms`] matches, and what replaces it.
 #[derive(Clone, Debug)]
 struct Literal {
-    value: Vec<u8>,
-    placeholder: &'static [u8],
+    forms: Regex,
+    replacement: Vec<u8>,
+}
+
+/// A pattern for `value` as written plainly or in a form a program or a person may give it: ASCII letters in either
+/// case, and each other byte optionally after any number of backslashes, as in a regular expression or a string
+/// escaped one or more times, or percent-encoded, as in a URL.
+fn written_forms(value: &[u8]) -> String {
+    let forms: String = value
+        .iter()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() {
+                char::from(*byte).to_string()
+            } else {
+                format!(r"\\*(?:\x{byte:02x}|%{byte:02x})")
+            }
+        })
+        .collect();
+    format!("(?i-u){forms}")
+}
+
+fn compiled(pattern: &str) -> Regex {
+    Regex::new(pattern).expect("a written-forms pattern is built from escaped bytes")
+}
+
+impl Literal {
+    fn new(value: &[u8], replacement: &[u8]) -> Self {
+        Self {
+            forms: compiled(&written_forms(value)),
+            replacement: replacement.to_vec(),
+        }
+    }
+
+    fn rewrite(&self, data: &[u8]) -> Option<Vec<u8>> {
+        let mut out: Option<Vec<u8>> = None;
+        let mut copied = 0;
+        for found in self.forms.find_iter(data) {
+            let out = out.get_or_insert_with(|| Vec::with_capacity(data.len()));
+            out.extend_from_slice(&data[copied..found.start()]);
+            out.extend_from_slice(&self.replacement);
+            copied = found.end();
+        }
+        let mut out = out?;
+        out.extend_from_slice(&data[copied..]);
+        Some(out)
+    }
 }
 
 /// The rules [`redact`] applies.
 #[derive(Clone, Debug, Default)]
 pub struct Rules {
     literals: Vec<Literal>,
-    hosts: Vec<(Vec<u8>, Vec<u8>)>,
+    hosts: Vec<Literal>,
+    /// Every literal and host pattern in one, so bytes with none of them are read once.
+    any_value: Option<Regex>,
     values: Option<PathBuf>,
 }
 
@@ -341,6 +387,7 @@ impl Rules {
             return Err(fail("schema_version must be 1"));
         }
         let mut rules = Self::fields();
+        let mut patterns = Vec::new();
         for (key, placeholder) in [
             ("email", EMAIL),
             ("organization", ORGANIZATION),
@@ -361,10 +408,10 @@ impl Rules {
                         "an {key} value is shorter than {SHORTEST_LITERAL} bytes"
                     )));
                 }
-                rules.literals.push(Literal {
-                    value: value.as_bytes().to_vec(),
-                    placeholder,
-                });
+                patterns.push(written_forms(value.as_bytes()));
+                rules
+                    .literals
+                    .push(Literal::new(value.as_bytes(), placeholder));
             }
         }
         if let Some(hosts) = object.get("hosts") {
@@ -386,26 +433,26 @@ impl Rules {
                         pytext::repr_str(stand_in)
                     )));
                 }
+                patterns.push(written_forms(name.as_bytes()));
                 rules
                     .hosts
-                    .push((name.as_bytes().to_vec(), stand_in.as_bytes().to_vec()));
+                    .push(Literal::new(name.as_bytes(), stand_in.as_bytes()));
             }
         }
         let written: Vec<&[u8]> = [EMAIL, ORGANIZATION, ACCOUNT, PLAN]
             .into_iter()
-            .chain(rules.hosts.iter().map(|(_, stand_in)| stand_in.as_slice()))
+            .chain(rules.hosts.iter().map(|host| host.replacement.as_slice()))
             .collect();
-        let values = rules
-            .literals
-            .iter()
-            .map(|literal| literal.value.as_slice())
-            .chain(rules.hosts.iter().map(|(name, _)| name.as_slice()));
-        for value in values {
-            if written.iter().any(|text| find(text, value, 0).is_some()) {
+        for value in rules.literals.iter().chain(&rules.hosts) {
+            if written.iter().any(|text| value.forms.is_match(text)) {
                 return Err(fail(
                     "a value occurs inside a placeholder or stand-in, so redaction would not settle",
                 ));
             }
+        }
+        if !patterns.is_empty() {
+            let any: Vec<String> = patterns.iter().map(|one| format!("(?:{one})")).collect();
+            rules.any_value = Some(compiled(&any.join("|")));
         }
         Ok(rules)
     }
@@ -419,18 +466,20 @@ impl Rules {
     pub fn stand_ins(&self) -> Vec<&[u8]> {
         self.hosts
             .iter()
-            .map(|(_, stand_in)| stand_in.as_slice())
+            .map(|host| host.replacement.as_slice())
             .collect()
     }
 
     fn apply(&self, data: &[u8]) -> Option<Vec<u8>> {
         let mut current = None;
-        for literal in &self.literals {
-            chain(&mut current, data, |bytes| {
-                rewrite(bytes, &literal.value, |_| {
-                    Some((literal.value.len(), literal.placeholder.to_vec()))
-                })
-            });
+        let values = self
+            .any_value
+            .as_ref()
+            .is_some_and(|any| any.is_match(data));
+        if values {
+            for literal in &self.literals {
+                chain(&mut current, data, |bytes| literal.rewrite(bytes));
+            }
         }
         for field in FIELDS.iter() {
             chain(&mut current, data, |bytes| {
@@ -465,10 +514,10 @@ impl Rules {
                 rewrite(bytes, anchor, skill_path)
             });
         }
-        for (name, stand_in) in &self.hosts {
-            chain(&mut current, data, |bytes| {
-                rewrite(bytes, name, |_| Some((name.len(), stand_in.clone())))
-            });
+        if values {
+            for host in &self.hosts {
+                chain(&mut current, data, |bytes| host.rewrite(bytes));
+            }
         }
         current
     }
