@@ -1247,6 +1247,7 @@ fn documents_with(documents: &Documents, replaced: &[(&str, Value)]) -> Document
             })
             .collect(),
         remedy_policy: documents.remedy_policy.clone(),
+        redacted: documents.redacted.clone(),
     }
 }
 

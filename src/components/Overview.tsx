@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { VisuallyHidden } from '@mantine/core'
 import { useMediaQuery } from '@mantine/hooks'
 import type { CSSProperties, FocusEvent, MouseEvent, ReactNode } from 'react'
-import { ArrowDown, ArrowUp, ChevronDown, ChevronUp } from 'lucide-react'
+import { ArrowDown, ArrowRight, ArrowUp, ChevronDown, ChevronUp } from 'lucide-react'
+import type { ScorecardTab } from '../lib/view'
 import { linearScale, logScale, position, ticks, tipPlace } from '../lib/chart'
 import type { Scale, TipPlace } from '../lib/chart'
 import { bandLabels, duration, estimatorLabels, foundLabels, lowerFirst, measured, perReview, reading, share } from '../lib/metrics'
@@ -10,7 +11,7 @@ import type { Axis as ChartAxis, DetectionView, Reading, Summary } from '../lib/
 import type { Configuration } from '../lib/data'
 import { labelSegments, overviewFirstDirection, overviewOrder } from '../lib/scoring'
 import type { LabelSegment, Measure, OverviewColumn, Scorecard } from '../lib/scoring'
-import { axisLabels, Chart, Mark, panelAxes, reviewColor, SetupName, setupParts } from './Chart'
+import { axisLabels, Chart, Mark, reviewColor, SetupName, setupParts } from './Chart'
 import { segmentLabels, trueSegments } from './ClaimLabels'
 import { VendorMark } from './VendorMark'
 import { costScaleNote, costText, Glossed, GuideItem, KeyTerms, Notes, notesFor, PeerBadge, Value } from './Reading'
@@ -57,11 +58,12 @@ const weight = ({ band, estimator }: DetectionView, { problems, prs }: Basis) =>
   : estimator === 'equalProblem' ? `The ${problems} ${band === 'all' ? 'known' : lowerFirst(bandLabels[band])} problems weigh the same, so one problem caught in every review is ${(100 / problems).toFixed(1)} points.`
     : `The ${prs} PRs weigh the same, so each PR is ${(100 / prs).toFixed(0)} points, shared among its problems.`
 
+const tables: Record<Column, ScorecardTab> = { detection: 'detection', claims: 'reliability', doubt: 'reliability', cost: 'usage', time: 'usage' }
 const pairedLabels: Record<ChartAxis, string> = { cost: 'cost', doubt: 'refuted or unproven claims', refuted: 'refuted claims', tokens: 'output tokens', time: 'time' }
 const orderText: Record<Column, string> = { detection: 'Most first', claims: 'Most first', doubt: 'Fewest first', cost: 'Lowest first', time: 'Shortest first' }
 
-export function Overview({ summaries, detection, axis, matching, basis, onSelect }: {
-  summaries: Summary[]; detection: DetectionView; axis: ChartAxis; matching: { included: number; excluded: number }; basis: Basis; onSelect: (id: string) => void
+export function Overview({ summaries, detection, axis, matching, basis, onSelect, onTable }: {
+  summaries: Summary[]; detection: DetectionView; axis: ChartAxis; matching: { included: number; excluded: number }; basis: Basis; onSelect: (id: string) => void; onTable?: (tab: ScorecardTab) => void
 }) {
   const [tipState, setTip] = useState<Tip | null>(null)
   const [focus, setFocus] = useState<string | null>(null)
@@ -146,22 +148,23 @@ export function Overview({ summaries, detection, axis, matching, basis, onSelect
   return <div className="overview" data-focusing={active ? '' : undefined} onMouseLeave={() => { setTip(null); setFocus(null) }}>
     <div className="measure-grid">
       <section className="measure-card lead-card" data-lead aria-labelledby="measure-lead">
-        <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against {panelAxes(axis).map(on => pairedLabels[on]).join(' and ')}</h3>
-          <p className="lead-about">Each setup sits at the same height in both panels; up and left is better. <span className="lead-scope">This comparison: {[`${basis.prs} PRs`,
+        <header className="measure-head"><div><h3 id="measure-lead">{foundLabels[detection.band]} against cost and {pairedLabels[axis]}</h3>
+          <p className="lead-about">Each setup sits at the same height in both panels; up and left is better. <span className="lead-scope">This comparison: {[`the ${basis.prs} PRs every selected setup ran`,
             detection.band === 'all' ? `${basis.known} known problems` : `${basis.problems} of ${basis.known} known problems are ${lowerFirst(bandLabels[detection.band])}`,
             basis.awaiting > 0 && `${basis.awaiting} awaiting a ruling`].filter(Boolean).join(' · ')}</span></p></div></header>
-        <Chart summaries={summaries} detection={detection} matching={matching} axis={axis} view="tradeoff" height={280} onSelect={onSelect} linked={{ id: active, point: setFocus, pin }}
+        <Chart summaries={summaries} detection={detection} matching={matching} axis="cost" beside={axis} view="tradeoff" height={280} onSelect={onSelect} linked={{ id: active, point: setFocus, pin }}
           guide={<><GuideItem label="Terms"><KeyTerms terms={['Review setup', 'Known problem', 'Impact band', 'Problems or PRs weighted equally', 'Refuted or unproven', 'Admitted review']} /></GuideItem>
             {weight(detection, basis) && <GuideItem label="Weight">{weight(detection, basis)}</GuideItem>}
             <GuideItem label="Charts below">Each ranks the setups by one measure, on its own scale; a setup without a value comes last. No single number ranks the setups. Select a setup to open its evidence.</GuideItem></>} />
       </section>
-      <header className="measure-section-head"><h3>One chart per measure</h3><p>Every chart below sorts the setups by one measure, on its own scale.</p></header>
+      <header className="measure-section-head"><h3>At a glance</h3><p>Every chart below sorts the setups by one measure, on its own scale. Full numbers has every value.</p></header>
       {columns.map(column => {
         const panel = panels[column], id = `measure-${column}`
         return <section key={column} className="measure-card" data-lead={column === 'detection' || undefined} aria-labelledby={id}>
           <header className="measure-head">
             <div><h3 id={id}>{panel.title}</h3><p><Glossed text={panel.about} /></p></div>
-            <span className="measure-order">{overviewFirstDirection[column] === 'ascending' ? <ArrowUp size={13} aria-hidden="true" /> : <ArrowDown size={13} aria-hidden="true" />}{panel.order}</span>
+            <span className="measure-aside"><span className="measure-order">{overviewFirstDirection[column] === 'ascending' ? <ArrowUp size={13} aria-hidden="true" /> : <ArrowDown size={13} aria-hidden="true" />}{panel.order}</span>
+              {onTable && <button type="button" className="text-button measure-link" onClick={() => onTable(tables[column])}>Full numbers<ArrowRight size={13} aria-hidden="true" /></button>}</span>
           </header>
           {panel.keys && <KeyList items={panel.keys} />}
           <div role="table" aria-label={`${panel.title}, ${panel.order.toLowerCase()}`} className="measure-rows">
