@@ -1,6 +1,10 @@
 # Rule-version-4 regrade: grading archives release draft
 
-This folder prepared the release of the regrade's grading archives. The owner approved it on 2026-10-30 ([`evidence-authorization.v1.json`](../evidence-authorization.v1.json)), and it was published as drafted that day: [`evidence-rule-v4-regrade-2026-10-25-v1`](https://github.com/kamui/code-review-bench/releases/tag/evidence-rule-v4-regrade-2026-10-25-v1), recorded in [`evidence-publication.v1.json`](../evidence-publication.v1.json). The rest of this file is the draft as the owner saw it.
+This folder prepared the release of the regrade's grading archives. The owner approved it on 2026-10-30 ([`evidence-authorization.v1.json`](../evidence-authorization.v1.json)), and it was published as drafted that day: [`evidence-rule-v4-regrade-2026-10-25-v1`](https://github.com/kamui/code-review-bench/releases/tag/evidence-rule-v4-regrade-2026-10-25-v1), recorded in [`evidence-publication.v1.json`](../evidence-publication.v1.json).
+
+[`review_archives.py`](review_archives.py) has changed since it ran on 2026-10-30, so it no longer matches the `scanner.sha256` that `evidence-publication.v1.json` pins for the bytes that ran then. The script now holds no personal identifier and loads them at runtime: addresses, organization ids and account ids from the redaction values file (`BENCH_REDACTION_VALUES`, else `~/.config/code-review-bench/redaction.json`), the git author email from `git config user.email`, the home path from the home directory, and the Windows account name from `REVIEW_WINDOWS_ACCOUNT`. To rerun it as step 2 of [What publishing would involve](#what-publishing-would-involve) says, run it where the values file and the git author email are set up, with `REVIEW_WINDOWS_ACCOUNT` set. It prints each input it could not load and lists them as `identity_inputs_missing` in its output, so a run without them does not read as a clean identity result.
+
+The rest of this file is the draft as the owner saw it.
 
 Prepared on 2026-10-30. Each fact is labelled **(run)** when a command here produced it, **(read)** when it comes from a file or record, and **(estimate)** when it is a judgement.
 
@@ -83,7 +87,7 @@ Grader workspaces: **yes**, without the clone, its caches and the client's accou
 Every member of every archive was read in memory and searched, not a sample. **(run)**
 
 - `[redacted-email]`, the owner's account email: **0 occurrences** in the 354 archives and in the 17 left-out attempts. **(run)**
-- `jack@jackchu.com`, the git author email: **0 occurrences** in both. **(run)**
+- `[redacted-email]`, the git author email: **0 occurrences** in both. **(run)**
 - Control: the same search found the owner's email 81 times in 27 of the 28 published rule-version-3 `plain` archives, whose Claude grader sessions carry it. So the search works. **(run)**
 - Other addresses: 48 distinct, all from the reviewed projects or the vendor. 2 are noreply addresses, 18 use example or test domains, and 28 are other test-data or upstream addresses. 25 of the 48 are not in the published rule-version-3 grading archives. 6 of those are real people and are in no tracked file: four `jsdom` maintainers in a `package.json` under `node_modules` (`l-bokeh-9232`), the `ripgrep` author in its man page (`n-ripgrep-2957`), and the `zod` author in its `package.json` (`j-trpc-5017`). Each appears in a session transcript and `work/stdout.jsonl` because the grader read that file. All six are in those projects' public sources. **(run)**
 

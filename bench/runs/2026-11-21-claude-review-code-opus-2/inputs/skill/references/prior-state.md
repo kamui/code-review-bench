@@ -1,0 +1,50 @@
+# Re-review and prior state
+
+Read when target pinning finds prior state from the reviewer identity, or a local target has a `prior_record`.
+
+## Prior-state sources
+
+A pull-request target takes prior state only from the persisted packet, in either mode. A local target takes it only from a `prior_record`; without one, every local run is a first review. Preserve stable finding ids and prior trailers.
+
+## Prior state from the packet
+
+Read prior state from the packet target pinning persisted, never from a second fetch. Record the reviewed heads, stable ids, and unresolved requests of the reviewer identity's prior reviews, matched with a trailing `[bot]` ignored on both sides, and take the prior head from the earlier review's run trailer (`head=`); context construction passes it as `--prior-head`. A reply edited after the prior review, without any code change, is later state and is re-read as prose. `python3 scripts/forge_packet.py later-state packet.json --review <prior review id>` lists everything created or edited after a review, and its `thread-state` lines name each thread whose undated resolved state cannot be ruled unchanged, so a thread is never assumed unchanged.
+
+## Duplicate-review shortcut
+
+Report an existing review instead of duplicating it only when `python3 scripts/forge_packet.py shortcut packet.json --review <the candidate's id> --merge-base <merge-base> --supplied-inputs <yes|no>` permits it, where supplied inputs are caller-supplied issues or specs. The helper reads the candidate's run trailer and prints one `identity` line for each mismatch against this run: head, base ref and SHA, merge-base, `workflow`, and `packet_context`, the digest it computes from the saved packet's intent. It requires `supplied_inputs=no` in both the trailer and this run, so a review that used a supplied spec never stands in for one without it, or the reverse. A trailer without `packet_context` and `supplied_inputs`, such as an older `context=` one, never qualifies.
+
+It then prints the `later-state` lines: one per PR, issue, review, comment, or reply created or edited after that review, excluding only that review's own unedited publication, prior-item replies included; one per packet gap; and one per unsettled thread state. Exit 0 permits the shortcut. Exit 1 permits it only when every printed line is a `thread-state` line the reviewer settles by matching that thread's current state to the candidate review's own prior-item classification of its finding — `resolved` against `fixed`, `accepted`, or `obsolete`, and `unresolved` against `not-fixed` or an item that review left open — recording the match in the private record; any other line, and any unmatched thread, defeats the shortcut, and a truncated packet never qualifies.
+
+## Re-review without losing state
+
+Use the single context run that context construction builds with `--prior-head`. Its `delta-conditions`, `delta-manifest` and `delta-overlap` sections report the inputs to the scope choice, and `delta-diff` holds the delta. Review the **delta** when all of these hold:
+
+- `ancestor: yes` and `merge-base-unchanged: yes`.
+- The earlier review's trailer has `files=complete`, or `coverage=complete` if it has no `files` key.
+- You judge from `## delta-overlap` that the delta's interactions are bounded.
+
+Otherwise review the full diff and write the failed condition in the private record. Two cases widen a delta review. Where a delta hunk overlaps the range of a still-open prior finding, review that whole enclosing range at head. Review in full any path the prior review listed under `Coverage gaps`. A delta review applies the same review rules to `## delta-diff`, which `--section delta-diff` selects from the store, and still runs every prior-item classification below.
+
+Carry every unresolved item into the review record and classify it. Keep each earlier `Unfinished verification` item in `outstanding` under its id until a task this run rules on, or a check it records at the reviewed head, settles it. For packet prior state, draft a reply on the item's existing thread for the caller to post. After one verified re-review, a declined finding that is still valid becomes disputed. Stop re-posting it, but keep its blocking effect until a human settles it.
+
+On a delta review, send optional verifier tasks only when the delta touches security, data integrity, destructive migration, compatibility, concurrency or failover, and give each optional candidate task that `area`. The earlier review's summary lists the premises earlier rounds settled under `Settled premises`, and a prior record's summary does too. Challenge one again only when the delta or new evidence affects it, counting changed callers, configuration and dependencies. Otherwise copy it unchanged into `record.verification.carried_premises` with its `id`, `area`, `premise` and `head`. A premise missing from that list is unchecked, so challenge it if the conclusion depends on it.
+
+## Local prior record
+
+A caller that continues after fixes, such as `implement-publish`, passes `prior_record`, the absolute path of the latest finalized `record.json` it accepted for a local target. Re-review that record at the final head in a new private directory, and write a new, complete record linked to it. Leave the prior record and its directory unchanged. Build the store with `--base-ref <base> --prior-head <prior head>` and choose delta or full scope under the section above. A delta review needs a prior record with no `unreviewed` file. Finalize with `--prior-record <prior record>`. The finalizer refuses a record that breaks these rules.
+
+1. **Classify.** Give every finding and question the prior renders one `prior_items` entry with its action, a classification, and decisive evidence in `note`. Recheck each finding reported fixed at the final head yourself with bounded reads and focused tests; it takes no verifier batch. A local prior item has no thread, so `reply`, `thread_id` and `comment_id` stay null.
+2. **Carry open items.** Render each `still-open`, `not-verifiable` or `disputed` item again under its id at the final head; an open `must-fix` stays `must-fix` until a classification settles it. Never render a `fixed`, `accepted` or `obsolete` item again; a new defect takes a new id.
+3. **Carry confirmations.** An unchanged mandatory finding keeps its confirmation as a `confirmed` candidate task with the prior's `trigger` and `batch` and `confirmed_in` naming the record whose accounting confirmed it: the prior's own `confirmed_in` when it carried one, otherwise the prior record. A materially changed mandatory claim, a new mandatory candidate and a required safety premise that is not carried still need verification within the remaining allowance, or stay outstanding.
+4. **Keep state.** Every prior `outstanding` and `routed` entry survives unless a task this run ruled on settles it, or a check at the final head settles an `outstanding` one, so carried outstanding work keeps coverage incomplete. A `routed.unresolved` or `routed.disputed` entry also leaves once its item is settled: classified `fixed`, `accepted` or `obsolete` here, or no longer open in the prior. An unrecoverable input names no item, so only a task releases it. The finalizer derives the spent flags from the prior's and refuses a batch for a phase the prior spent.
+
+A record from before `review-code-record/1`, such as an implementation-gate record or its addenda, is not a prior record: review the final head in full from its base without one, with a new allowance, and name the earlier record in the coverage summary.
+
+## Replies and prior state
+
+Read replies as prose first. An addresser reply may state a disposition — `implemented`, `already-addressed`, `answered`, `declined`, `needs-info`, or `blocked` — with its evidence, and an agent reply may end with the trailer `<!-- reply to=<stable id> disposition=<disposition> head=<full SHA> -->`. Never require or add a trailer on a human's behalf. Verify replies against current code. A reply states intent; it does not prove outcome.
+
+On re-review, classify each prior item as `fixed`, `accepted`, `obsolete`, `still-open`, or `not-verifiable`. For packet prior state, retain each item's thread node id with its classification for the caller's thread actions; `review-code` does not mutate forge thread state. `Accepted` means the rereviewer verified that technical evidence makes the finding fail the rubric, or an authorized human explicitly accepted the residual risk; the author's `declined` disposition alone is not acceptance. Keep the other states open; for packet prior state, draft a reply for the existing thread rather than creating a duplicate, and the caller posts it. A declined item that remains after one verified re-review becomes `disputed`; list it for a person and stop re-posting it.
+
+Save each drafted packet prior-item reply as that prior item's `reply`, with the packet thread's node id as `thread_id` and its first comment's numeric id as `comment_id`; both are null for an item without a forge thread, and a disputed item drafts no reply. The finalizer checks the ids against `--packet`, keeps all three out of the payload, and ends each `fixed`, `accepted`, `obsolete`, or `still-open` reply with a `<!-- prior-item id=… classification=… head=… -->` trailer; never write it yourself. A `not-verifiable` reply carries none and remains later state.
