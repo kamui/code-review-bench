@@ -80,7 +80,7 @@ export type Box = { left: number; top: number; right: number; bottom: number }
 export type LabelRequest = { id: string; x: number; y: number; width: number; height: number }
 export type LabelPlacement = { id: string; x: number; y: number; anchor: 'start' | 'middle' | 'end'; box: Box; leader: boolean }
 
-const overlaps = (a: Box, b: Box) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
+export const overlaps = (a: Box, b: Box) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
 
 /** Greedy placement in request order; a label that fits nowhere is left to the tooltip rather than drawn over data. */
 export function placeLabels(requests: LabelRequest[], obstacles: Box[], bounds: Box, distances = [12, 24, 40, 58, 76]): LabelPlacement[] {
