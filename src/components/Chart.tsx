@@ -143,7 +143,7 @@ export function Chart({ summaries, detection, matching, axis, beside, view, onSe
       <span>No other impact band or average is substituted. Choose them above.</span></div>
       : view === 'setups' ? <SetupRows points={points} measure={measure} axis={axis} scale={scale} frontier={frontier} undecided={undecided} onSelect={onSelect} interactions={interactions} />
         : view === 'tradeoff' ? <div className="twin">{panels.map(panel => <Scatter key={panel.on} points={panel.points} dimensions={`${lowerFirst(measure)} against ${lowerFirst(axisLabels[panel.on])}`}
-          axis={panel.on} scale={panel.scale} spotlight={spotlight?.method ?? null} marked={hovered?.id ?? linked?.id ?? null} named={named} tops={topIds} onSelect={pinAndSelect} interactions={interactions} yTitle={foundLabels[detection.band]} height={height} />)}</div>
+          axis={panel.on} scale={panel.scale} spotlight={spotlight?.method ?? null} marked={hovered?.id ?? linked?.id ?? null} named={panel.on === 'cost' ? named : topIds} tops={topIds} onSelect={pinAndSelect} interactions={interactions} yTitle={foundLabels[detection.band]} height={height} />)}</div>
         : view === 'skills' ? <MethodPanels points={measured} axis={axis} scale={scale} yTitle={foundLabels[detection.band]} onSelect={onSelect} interactions={interactions} />
           : <Models points={points} measure={measure} onSelect={onSelect} interactions={interactions} />}
     {hoveredPoint && hovered && <Tooltip point={hoveredPoint} measure={view === 'tradeoff' ? 'Found' : measure} axes={view === 'models' ? [] : view === 'tradeoff' ? shownAxes : [axis]} place={hovered} />}
