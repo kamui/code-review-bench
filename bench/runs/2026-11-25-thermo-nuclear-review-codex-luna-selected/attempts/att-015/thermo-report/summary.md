@@ -1,0 +1,5 @@
+## Findings
+
+[P2] Preserve custom session-auth hash implementations during fallback verification — `django/contrib/auth/base_user.py:141-143`
+
+`AbstractBaseUser.get_session_auth_fallback_hash()` computes fallback hashes with `_get_session_auth_hash()` directly instead of using the subclass's `get_session_auth_hash()` implementation. A custom user model that overrides the existing public method to include additional account state or use a different hash calculation will have stored session hashes that none of these fallback values match. During secret rotation, `get_user()` consequently reaches its failure branch and flushes that session (`django/contrib/auth/__init__.py:213-221`), logging the user out even when the old secret is configured in `SECRET_KEY_FALLBACKS`. Custom hash implementations therefore lose the session-preserving behavior this change adds unless they also implement the newly introduced fallback method.
