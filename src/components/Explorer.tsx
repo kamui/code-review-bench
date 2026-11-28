@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ActionIcon, Alert, Anchor, Badge, Button, Checkbox, Container, Group, Loader, Paper, Popover,
   SegmentedControl, Select, Stack, Switch, Table, Tabs, Text, TextInput, Title, Tooltip, VisuallyHidden, useComputedColorScheme, useMantineColorScheme } from '@mantine/core'
-import { useMediaQuery } from '@mantine/hooks'
+import { useClickOutside, useMediaQuery } from '@mantine/hooks'
 import { Link, Navigate, useLocation, useMatch, useNavigate, useSearch } from '@tanstack/react-router'
 import { ArrowDown, ArrowDownToLine, ArrowUp, ArrowUpDown, ArrowUpRight, ChartBarStacked, ChartNoAxesGantt, Check, ChevronDown, ChevronRight, CircleDashed, CodeXml, Cpu, Database,
   EyeOff, FileCheck2, Grid3x3, Hourglass, LayoutGrid, Moon, RotateCcw, Scale, Search, ShieldCheck, SlidersHorizontal, Sun, X } from 'lucide-react'
@@ -102,7 +102,6 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
     { label: 'By method', value: 'skills', icon: LayoutGrid }, { label: 'By setup', value: 'setups', icon: ChartNoAxesGantt }, { label: 'By model', value: 'models', icon: Cpu }]
   const plotChoices = view === 'overview' ? axisChoices.filter(choice => choice.value !== 'cost') : axisChoices
   const plotted = view === 'overview' && axis === 'cost' ? 'doubt' : axis
-  const plotLabel = view === 'overview' ? 'Compare cost with' : 'Plot against'
   const plotAgainst = (value: string | null) => {
     const next = axes.find(item => item === value)
     if (next) onSearch({ axis: unlessDefault(next, 'cost') }, 'scorecard')
@@ -240,9 +239,9 @@ export function Dashboard({ dataset: recorded, page, search, onSearch, now = new
               label: narrow ? item.label : <span className="switch-label"><item.icon size={15} strokeWidth={1.9} aria-hidden="true" />{item.label}</span> }))} />
             <Button variant="default" size="xs" className="filters-toggle" leftSection={<SlidersHorizontal size={14} aria-hidden="true" />} rightSection={<ChevronDown size={14} aria-hidden="true" />}
               aria-expanded={optionsOpen} onClick={() => setOptionsOpen(open => !open)}>Chart options · {bandLabels[band]} · {configurations.filter(item => selected.includes(item.id)).length} of {configurations.length} setups</Button>
-            {view !== 'models' && <div className="axis-switch"><span className="control-label" id="axis-label">{plotLabel}</span>{narrow
-              ? <Select aria-label={plotLabel} size="xs" allowDeselect={false} value={plotted} onChange={plotAgainst} data={plotChoices} />
-              : <SegmentedControl aria-label={plotLabel} size="xs" value={plotted} onChange={plotAgainst} data={plotChoices} />}</div>}
+            <div className="axis-switch" title={view === 'models' ? 'By model shows detection only' : undefined}><span className="control-label" id="axis-label">Compare with</span>{narrow
+              ? <Select aria-label="Compare with" size="xs" disabled={view === 'models'} allowDeselect={false} value={plotted} onChange={plotAgainst} data={plotChoices} />
+              : <SegmentedControl aria-label="Compare with" size="xs" disabled={view === 'models'} value={plotted} onChange={plotAgainst} data={plotChoices} />}</div>
           </div>
           <div className="filter-bar" data-open={optionsOpen || undefined}>
             <div className="measure-controls">
@@ -400,8 +399,11 @@ function StatusNotice({ label, limits, unresolved, children }: { label: string; 
   const summary = <p className="status-summary">{limits.length > 0 && 'Saved reviews, delivery and usage remain available. Unresolved detection outcomes receive zero credit, with an explanation. Measures blocked by missing evidence are unavailable, with their reasons. '}
     {unresolved && 'Some claim assessments are unresolved. Reliability measurements are provisional.'}</p>
   const icon = <Hourglass className="status-icon" size={15} strokeWidth={2} aria-hidden="true" />
+  const [open, setOpen] = useState(false)
+  const outside = useClickOutside<HTMLDetailsElement>(() => setOpen(false))
   return <aside className="status-notice" aria-label="Result status">
-    {limits.length ? <details className="status-details"><summary>{icon}<span className="status-title">{title}</span><span className="status-more">What is still open ({limits.length})<ChevronDown size={14} aria-hidden="true" /></span></summary>
+    {limits.length ? <details ref={outside} className="status-details" open={open} onToggle={event => setOpen(event.currentTarget.open)}
+      onKeyDown={event => { if (event.key === 'Escape') setOpen(false) }}><summary>{icon}<span className="status-title">{title}</span><span className="status-more">What is still open ({limits.length})<ChevronDown size={14} aria-hidden="true" /></span></summary>
       <div className="status-body">{summary}<ul>{limits.map(limit => <Limit key={limit} text={limit} />)}</ul>{children}</div></details>
       : <div className="status-line">{icon}<span className="status-title"><span className="status-label">{label}</span>{title}</span>{summary}{children}</div>}
   </aside>
